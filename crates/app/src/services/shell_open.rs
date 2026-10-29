@@ -5,6 +5,27 @@
 
 use std::path::Path;
 
+/// 删除到系统回收站 / 废纸篓（021 文件树删除、052 会话清理、扩展卸载共用）。
+///
+/// **macOS 必须显式选 NSFileManager 通道**：`trash` crate 在 macOS 的默认实现
+/// 是 `osascript` 呼叫 Finder，首次使用会弹「pi-flash 想要控制访达」的自动化
+/// 授权框（拒绝 = 删除直接失败），还会响一声 Finder 的删除音；而
+/// `NSFileManager.trashItemAtURL` 不要任何额外授权、更快、无声音——删掉的文件
+/// 一样进废纸篓。Windows 保持默认通道（回收站 + 已配的 COM 初始化）。
+pub(crate) fn trash_delete(path: &Path) -> Result<(), trash::Error> {
+    #[cfg(target_os = "macos")]
+    {
+        use trash::macos::{DeleteMethod, TrashContextExtMacos};
+        let mut ctx = trash::TrashContext::new();
+        ctx.set_delete_method(DeleteMethod::NsFileManager);
+        return ctx.delete(path);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        trash::delete(path)
+    }
+}
+
 /// 用系统默认浏览器打开文件（html/htm）。
 pub(crate) fn open_in_browser(path: &std::path::Path) {
     #[cfg(windows)]

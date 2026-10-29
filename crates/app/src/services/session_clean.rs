@@ -52,7 +52,7 @@ impl Chat {
                             continue;
                         }
                         // 单文件失败（句柄被占等）只跳过该会话，不中断整批
-                        if trash::delete(&path).is_ok() {
+                        if crate::services::shell_open::trash_delete(&path).is_ok() {
                             removed.push(path);
                         }
                     }

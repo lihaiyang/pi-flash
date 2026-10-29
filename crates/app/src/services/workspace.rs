@@ -220,7 +220,8 @@ pub fn save_sound_pref(on: bool) {
 }
 
 /// Agent-run finished notification sound —— PF 原创暖木琴双音
-/// （见 [`crate::services::sound`]）；非 Windows 平台为 no-op。
+/// （见 [`crate::services::sound`]）：Windows `PlaySoundW`、macOS `afplay`
+/// 播同一份合成 WAV，其它平台 no-op。
 pub fn play_notify_sound() {
     crate::services::sound::play_notify_sound();
 }

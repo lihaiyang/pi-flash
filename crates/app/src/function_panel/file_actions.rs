@@ -699,11 +699,11 @@ impl Chat {
             let res = cx
                 .background_spawn(async move {
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        trash::delete(&path_bg)
+                        crate::services::shell_open::trash_delete(&path_bg)
                     }))
                     .unwrap_or_else(|_| {
                         Err(trash::Error::Unknown {
-                            description: "trash::delete panicked".into(),
+                            description: "trash_delete panicked".into(),
                         })
                     })
                 })

@@ -4,8 +4,9 @@
 //! 音程是纯五度（440 → 659.25 Hz），音色用加法合成模拟木琴——基频之外叠一个
 //! 四次泛音（×4，横梁振动的非谐近似），泛音衰减远快于基频（0.12 s vs 0.4 s），
 //! 听感厚实温和、不打扰。两音相隔 0.16 s 触发，基频包络 5 ms 线性淡入后指数
-//! 衰减到 0.001。Rust 侧合成 16-bit PCM WAV，Windows 用
-//! `PlaySoundW(SND_MEMORY)` 播放，不依赖任何音频资源文件。
+//! 衰减到 0.001。Rust 侧合成 16-bit PCM WAV：Windows 用
+//! `PlaySoundW(SND_MEMORY)` 内存播，macOS 落一份 `<PF>/sound/done.wav` 交给
+//! `/usr/bin/afplay` 播，都不依赖任何音频资源文件。
 //!
 //! 候选试听稿见 `tmp/sound/gen.js`（A 钟声 / B 玻璃琶音 / C 本实现，用户选 C）。
 

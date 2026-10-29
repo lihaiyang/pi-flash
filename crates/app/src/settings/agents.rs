@@ -224,7 +224,7 @@ impl Chat {
         if section != AG_NEW && section != name {
             let old = dir.join(format!("{section}.md"));
             if old.exists() {
-                let _ = trash::delete(&old);
+                let _ = crate::services::shell_open::trash_delete(&old);
             }
         }
         if let Err(e) = std::fs::write(&path, pi_link::agents::serialize_agent(&profile)) {
@@ -250,7 +250,7 @@ impl Chat {
             return;
         }
         if let Some(path) = a.path {
-            if let Err(e) = trash::delete(&path) {
+            if let Err(e) = crate::services::shell_open::trash_delete(&path) {
                 self.mc_set_error(&e.to_string(), cx);
                 return;
             }

@@ -248,5 +248,16 @@ vendored pi，ad-hoc 签名；**不出 dmg/img**）。以下是踩过的坑，�
 - **`input.mouse` 的坐标是逻辑像素**（文档写"物理像素"，实现是 `px(...)`
   直接进 gpui 事件 → 逻辑）：`rx/ry` 要按 `目标逻辑坐标 / 视口物理尺寸` 折算，
   否则倍数按 scale_factor 放大（Retina 上是 2×）。
+- **删除到废纸篓必须显式选 NSFileManager 通道**：`trash` crate 在 macOS 的
+  默认实现是 `osascript` 让 **Finder** 删，首次使用弹「pi-flash 想要控制访达」
+  自动化授权框（拒绝 = 删除失败），还响一声删除音。`NSFileManager.trashItemAtURL`
+  不要额外授权、更快、无声音，落到同一个废纸篓。四个调用点（文件树删除 /
+  会话清理 / 扩展卸载）统一走 `services::shell_open::trash_delete`。
+  另：**shell 读 `~/.Trash` 需要「完全磁盘访问」**，验证删除结果只能看
+  `trashItemAtURL` 的返回值 + 源文件是否还在，别去 `ls ~/.Trash`（Operation
+  not permitted）。
+- **提示音**：`<PF>/sound/done.wav` 落盘一次，`/usr/bin/afplay` 后台播
+  （已实测：轮末生成 49KB WAV 且 afplay 进程在跑）。声音开关默认关
+  （`app-settings.json` 的 `sound`），自动化里想验就先写 `{"sound": true}`。
 - **未适配**：081 自动更新（只发 Windows 资产，macOS 上 `checks_enabled()`
   直接 false）、任务的 win_pin（Windows 专属）、提示音改 `afplay` 播合成 WAV。
