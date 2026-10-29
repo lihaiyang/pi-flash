@@ -1474,6 +1474,13 @@ impl PlatformWindow for MacWindow {
         this.renderer.draw(scene);
     }
 
+    /// 窗口最近一帧的离屏回读（macOS：RenderTarget 纹理 + blit readback）。
+    /// 与 Windows 的 D3D11 staging readback 同语义：进程内、不抢屏。
+    fn render_to_image(&self, scene: &crate::Scene) -> anyhow::Result<image::RgbaImage> {
+        let mut this = self.0.lock();
+        this.renderer.render_to_image(scene)
+    }
+
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {
         self.0.lock().renderer.sprite_atlas().clone()
     }

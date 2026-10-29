@@ -233,11 +233,18 @@ vendored pi，ad-hoc 签名；**不出 dmg/img**）。以下是踩过的坑，�
 - **启动不 zoom**：010 §4「默认最大化」是 Windows 口径（外框/客户区不对称），
   macOS 的 `zoom_window()` 顶到菜单栏、又和「绿点 = 全屏」的惯例打架，
   已按平台关掉，保持 1180×760 建窗尺寸。
-- **`ui.screenshot`（`Window::render_to_image`）在 macOS 未实现**：vendored
-  gpui 只给 Windows DirectX 后端做了 staging readback，macOS 的 metal
-  renderer 没有回读路径 → 该 op 返回 `render_to_image not implemented for
-  this platform`。macOS 的 UI 自动化只能靠 `ui.snapshot`（状态）+ `ui.hit_probe`
-  （命中链/几何），**看不到像素**。
+- **`ui.screenshot`（`Window::render_to_image`）macOS 已补**（2026-10-29，
+  vendored gpui `metal_renderer::render_to_image`）：把 scene 画进一张自己的
+  Private 纹理（格式沿用 layer 的 `BGRA8Unorm`），blit 到 `StorageModeShared`
+  buffer 再逐行读回、`B G R A → R G B A` 换位。三个坑：
+  1. `copyFromTexture:…toBuffer:destinationBytesPerRow:` 的 bytesPerRow **必须
+     256 对齐**（2360 宽 → 9440 要补到 9472），读回时按 stride 跳行；
+  2. 截图内容 = `rendered_frame.scene`（最近一次**绘制**的帧），而 macOS 窗口
+     一遮挡就停帧 → 前后台切换后立刻截图会拿到旧帧甚至空视图。自动化里要
+     先置前（`osascript` 那行）再 shot，必要时多截一次；
+  3. 回读图里**没有** AppKit 画的东西（红黄绿交通灯、窗口阴影）——它们不属于
+     gpui 的 Metal layer，别拿截图去判断"红绿灯有没有压住按钮"，用
+     `ui.hit_probe` 看几何。
 - **macOS 的帧由 CVDisplayLink 驱动，窗口被完全遮挡就停帧**：gpui 的
   `start_display_link` 只在 `NSWindowOcclusionStateVisible` 时启动，遮挡时
   `stop_display_link`（省 CPU，AppKit 惯例）。后果是**跑 pif-ui 自动化前先把

@@ -1,8 +1,10 @@
 //! ui.screenshot —— 窗口最近一帧渲染回读为 PNG（pi-flash-0uq）。
 //!
-//! 走 vendored gpui 的 `Window::render_to_image()`（D3D11 staging 纹理
-//! readback，移植自 zed main）：进程内、不抢屏、窗口被遮挡/最小化也能截，
-//! 像素即 gpui scene 输出，合规于「禁止 OS 截图」纪律。
+//! 走 vendored gpui 的 `Window::render_to_image()`：Windows = D3D11 staging
+//! 纹理 readback（移植自 zed main），macOS = 离屏 RenderTarget 纹理 + blit
+//! readback（2026-10-29 本项目补）。进程内、不抢屏、窗口被遮挡/最小化也能截
+//! （macOS 需窗口有过一帧：遮挡停帧时截到的是旧帧），像素即 gpui scene 输出，
+//! 合规于「禁止 OS 截图」纪律。
 //!
 //! 注意截的是**最近一次绘制**的帧：exec 改状态后紧跟 shot 可能差一帧，
 //! 使用模式是先 `pif-ui wait` 后 shot（或隔一次 CLI 调用）。

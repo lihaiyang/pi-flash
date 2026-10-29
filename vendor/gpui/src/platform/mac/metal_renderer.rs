@@ -370,8 +370,12 @@ impl MetalRenderer {
         loop {
             let mut instance_buffer = self.instance_buffer_pool.lock().acquire(&self.device);
 
-            let command_buffer =
-                self.draw_primitives(scene, &mut instance_buffer, drawable, viewport_size);
+            let command_buffer = self.draw_primitives(
+                scene,
+                &mut instance_buffer,
+                drawable.texture(),
+                viewport_size,
+            );
 
             match command_buffer {
                 Ok(command_buffer) => {
@@ -416,11 +420,105 @@ impl MetalRenderer {
         }
     }
 
+    /// 把 scene 画进 `render_target` 纹理。屏幕路径传 drawable 的纹理，
+    /// 离屏截图（[`Self::render_to_image`]）传自己的目标纹理——两条路共用
+    /// 同一套 pipeline/pass 配置，截出来的像素与屏幕上那一帧一致。
+    /// 把 scene 渲染到离屏纹理再读回成 RGBA 图——`Window::render_to_image`
+    /// 的 macOS 实现（Windows 那边是 D3D11 staging readback，本项目移植的）。
+    ///
+    /// 与屏幕路径共用 `draw_primitives`，只是目标从 drawable 换成自己的私有
+    /// 纹理，最后用 blit 拷进 Shared buffer 读回。**不碰 layer/drawable/present**，
+    /// 所以不影响屏幕上的正常出帧，窗口被遮挡/最小化时也能截。
+    pub fn render_to_image(&mut self, scene: &Scene) -> anyhow::Result<image::RgbaImage> {
+        let drawable_size = self.layer.drawable_size();
+        let width = (drawable_size.width as f32).ceil().max(0.) as u32;
+        let height = (drawable_size.height as f32).ceil().max(0.) as u32;
+        anyhow::ensure!(width > 0 && height > 0, "窗口尺寸为 0，无法截图");
+        let viewport_size: Size<DevicePixels> = size(
+            (width as i32).into(),
+            (height as i32).into(),
+        );
+
+        // 目标纹理：格式与 drawable 一致（layer 上已设 BGRA8Unorm），
+        // Private 存储（渲染最快），读回靠 blit。
+        let descriptor = metal::TextureDescriptor::new();
+        descriptor.set_width(width as u64);
+        descriptor.set_height(height as u64);
+        descriptor.set_pixel_format(self.layer.pixel_format());
+        descriptor.set_usage(
+            metal::MTLTextureUsage::RenderTarget | metal::MTLTextureUsage::ShaderRead,
+        );
+        descriptor.set_storage_mode(metal::MTLStorageMode::Private);
+        let target = self.device.new_texture(&descriptor);
+
+        // 与 draw 同款的实例缓冲自适应：scene 太大就换更大的池再来一遍
+        let mut instance_buffer = self.instance_buffer_pool.lock().acquire(&self.device);
+        let command_buffer = loop {
+            match self.draw_primitives(scene, &mut instance_buffer, &target, viewport_size) {
+                Ok(command_buffer) => break command_buffer,
+                Err(err) => {
+                    let mut pool = self.instance_buffer_pool.lock();
+                    let buffer_size = pool.buffer_size;
+                    if buffer_size >= 256 * 1024 * 1024 {
+                        anyhow::bail!("render_to_image: scene 过大（{err}）");
+                    }
+                    pool.reset(buffer_size * 2);
+                    drop(pool);
+                    instance_buffer = self.instance_buffer_pool.lock().acquire(&self.device);
+                }
+            }
+        };
+
+        // blit 到 Shared 缓冲（Texture→Buffer 的 bytePerRow 要 256 对齐）
+        let row_bytes = (width * 4) as u64;
+        let row_stride = row_bytes.div_ceil(256) * 256;
+        let buffer_bytes = row_stride * height as u64;
+        let readback = self.device.new_buffer(
+            buffer_bytes,
+            metal::MTLResourceOptions::StorageModeShared,
+        );
+        let blit = command_buffer.new_blit_command_encoder();
+        blit.copy_from_texture_to_buffer(
+            &target,
+            0,
+            0,
+            metal::MTLOrigin { x: 0, y: 0, z: 0 },
+            metal::MTLSize::new(width as u64, height as u64, 1),
+            &readback,
+            0,
+            row_stride,
+            buffer_bytes,
+            metal::MTLBlitOption::None,
+        );
+        blit.end_encoding();
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+        self.instance_buffer_pool.lock().release(instance_buffer);
+
+        // BGRA → RGBA（layer 的像素格式就是 BGRA8Unorm，逐通道换位即可）
+        let mut image = image::RgbaImage::new(width, height);
+        let src = unsafe {
+            std::slice::from_raw_parts(readback.contents() as *const u8, buffer_bytes as usize)
+        };
+        for y in 0..height as usize {
+            let row = &src[y * row_stride as usize..][..row_bytes as usize];
+            for x in 0..width as usize {
+                let px = &row[x * 4..x * 4 + 4];
+                image.put_pixel(
+                    x as u32,
+                    y as u32,
+                    image::Rgba([px[2], px[1], px[0], px[3]]),
+                );
+            }
+        }
+        Ok(image)
+    }
+
     fn draw_primitives(
         &mut self,
         scene: &Scene,
         instance_buffer: &mut InstanceBuffer,
-        drawable: &metal::MetalDrawableRef,
+        render_target: &metal::TextureRef,
         viewport_size: Size<DevicePixels>,
     ) -> Result<metal::CommandBuffer> {
         let command_queue = self.command_queue.clone();
@@ -430,7 +528,7 @@ impl MetalRenderer {
 
         let mut command_encoder = new_command_encoder(
             command_buffer,
-            drawable,
+            render_target,
             viewport_size,
             |color_attachment| {
                 color_attachment.set_load_action(metal::MTLLoadAction::Clear);
@@ -467,7 +565,7 @@ impl MetalRenderer {
 
                     command_encoder = new_command_encoder(
                         command_buffer,
-                        drawable,
+                        render_target,
                         viewport_size,
                         |color_attachment| {
                             color_attachment.set_load_action(metal::MTLLoadAction::Load);
@@ -1158,7 +1256,7 @@ impl MetalRenderer {
 
 fn new_command_encoder<'a>(
     command_buffer: &'a metal::CommandBufferRef,
-    drawable: &'a metal::MetalDrawableRef,
+    render_target: &'a metal::TextureRef,
     viewport_size: Size<DevicePixels>,
     configure_color_attachment: impl Fn(&RenderPassColorAttachmentDescriptorRef),
 ) -> &'a metal::RenderCommandEncoderRef {
@@ -1167,7 +1265,7 @@ fn new_command_encoder<'a>(
         .color_attachments()
         .object_at(0)
         .unwrap();
-    color_attachment.set_texture(Some(drawable.texture()));
+    color_attachment.set_texture(Some(render_target));
     color_attachment.set_store_action(metal::MTLStoreAction::Store);
     configure_color_attachment(color_attachment);
 
