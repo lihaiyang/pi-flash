@@ -238,6 +238,13 @@ vendored pi，ad-hoc 签名；**不出 dmg/img**）。以下是踩过的坑，�
   renderer 没有回读路径 → 该 op 返回 `render_to_image not implemented for
   this platform`。macOS 的 UI 自动化只能靠 `ui.snapshot`（状态）+ `ui.hit_probe`
   （命中链/几何），**看不到像素**。
+- **macOS 的帧由 CVDisplayLink 驱动，窗口被完全遮挡就停帧**：gpui 的
+  `start_display_link` 只在 `NSWindowOcclusionStateVisible` 时启动，遮挡时
+  `stop_display_link`（省 CPU，AppKit 惯例）。后果是**跑 pif-ui 自动化前先把
+  窗口置前**，否则「渲染期才建」的东西根本不存在——实测文件没置前时
+  `file.set_text` 报「文件没有编辑器（未渲染）」（编辑器是 prepaint 里建的），
+  置前后同一条命令立刻成功、`file.save` 也正常落盘。
+  `osascript -e 'tell application "System Events" to set frontmost of ...'` 可用。
 - **`input.mouse` 的坐标是逻辑像素**（文档写"物理像素"，实现是 `px(...)`
   直接进 gpui 事件 → 逻辑）：`rx/ry` 要按 `目标逻辑坐标 / 视口物理尺寸` 折算，
   否则倍数按 scale_factor 放大（Retina 上是 2×）。
