@@ -187,3 +187,59 @@ lnk + `User Pinned\TaskBar` 死链自愈。这里只记工程陷阱：
   直接喂 GUID `00021401-0000-0000-C000-000000000046`。
 
 
+
+## macOS 构建与运行（2026-10-29 首次出 .app）
+
+打包入口 `scripts/release-macos.sh` → `dist/pi-flash.app`（内置 node +
+vendored pi，ad-hoc 签名；**不出 dmg/img**）。以下是踩过的坑，改 macOS 侧
+代码前先看这一节。
+
+- **只装 Command Line Tools 的机器没有 Metal 编译器**：gpui 的 build.rs 走
+  `xcrun --sdk macosx metal` 编 `shaders.metal`，CLT-only 环境直接
+  `unable to find utility "metal"`（要完整 Xcode 或 Xcode 26 的
+  MetalToolchain 组件）。解法 = `crates/app/Cargo.toml` 里对 darwin 打开
+  gpui 的 `runtime_shaders` feature：build 期改为把「cbindgen 头 + metal 源」
+  拼进二进制，首次建 renderer 时 `newLibraryWithSource` 现场编译。代价是
+  启动多一次 Metal 源码编译——**换到有 Xcode 的机器出包时应关掉这个 feature
+  回到预编译 metallib**。
+- **`serde_json` 必须是全平台 build-dependency**：`build.rs` 的
+  `dev_sign_proof`（090-5 自签宿主证明）要解析 proof.mjs 的 JSON，它曾只在
+  `[target.'cfg(windows)'.build-dependencies]` 里 → macOS 上 build script
+  E0433。winresource 才是 Windows 专属。
+- **macOS 钥匙串条目只信任「写它的那个二进制」**（adhoc 签名下 designated
+  requirement = cdhash）。本项目凭据是**两个二进制**共用：PF 自己 + `pif-secret`
+  （pi 执行 `!'…/pif-secret' get <p>` 取回）。实测 PF(keyring) 写 → pif-secret
+  读 = errSecAuthFailed；反过来 `security` 写 → keyring 读会**卡在系统授权
+  弹窗**上挂死。解法 = `credentials::KeyringVault` 在 macOS 上整段改走
+  `/usr/bin/security`（写/读/删都用它，ACL 只认它一个），密码经 stdin 打两遍
+  传入（`add-generic-password -w` 后面不带值），不进 argv。附带好处：
+  `pif-secret` 多了 `set`/`del` 子命令，可手工救急。
+- **终端登录 shell**：Windows 是 `ComSpec`；macOS 必须 `$SHELL -l`。从 Finder
+  双击 .app 起的进程只有 launchd 的最小 PATH（/usr/bin:/bin:/usr/sbin:/sbin），
+  不起登录 shell 的话 zshrc/zprofile 里的 git/node/brew/cargo 全找不到。
+  021【执行】的 `cmd /k` 等价物 = `zsh -l -c "<cmd>; exec zsh -l"`（脚本退出
+  后 tab 留在同一 PTY 上继续可敲）。
+- **`LANG=C.UTF-8` 在 macOS 的 libc 里不存在**（setlocale 报错），兜底要用
+  `en_US.UTF-8`；`shell_env()` 已按平台分叉。
+- **.app 布局的铁律**：`Contents/MacOS` 只放主可执行（多放东西会让外层
+  codesign 报 "code object is not signed at all"）；`node`、`vendor/pi`、
+  `pif-secret` 一律 `Contents/Resources`。因此 `pi_link::vendor`（node/vendor
+  解析）与 `pi_link::auth_json::helper_exe` 都加了 `../Resources/` 回退。
+- **自绘窗口钮在 macOS 要整段不渲染**：右上的 min/max/close 是 Windows 口径
+  （关闭字形是 Segoe Fluent Icons `\u{E8BB}`，Mac 上必成豆腐块），而原生
+  交通灯已经在左上角。同时左段内容要 inset 78px 让开红绿灯，否则收放钮被压
+  在灯底下。窗口拖拽/双击 titlebar 缩放靠 AppKit 的标题栏条带（gpui 的
+  `window_control_area(Drag)` 在 mac 上是空实现），不用另做。
+- **启动不 zoom**：010 §4「默认最大化」是 Windows 口径（外框/客户区不对称），
+  macOS 的 `zoom_window()` 顶到菜单栏、又和「绿点 = 全屏」的惯例打架，
+  已按平台关掉，保持 1180×760 建窗尺寸。
+- **`ui.screenshot`（`Window::render_to_image`）在 macOS 未实现**：vendored
+  gpui 只给 Windows DirectX 后端做了 staging readback，macOS 的 metal
+  renderer 没有回读路径 → 该 op 返回 `render_to_image not implemented for
+  this platform`。macOS 的 UI 自动化只能靠 `ui.snapshot`（状态）+ `ui.hit_probe`
+  （命中链/几何），**看不到像素**。
+- **`input.mouse` 的坐标是逻辑像素**（文档写"物理像素"，实现是 `px(...)`
+  直接进 gpui 事件 → 逻辑）：`rx/ry` 要按 `目标逻辑坐标 / 视口物理尺寸` 折算，
+  否则倍数按 scale_factor 放大（Retina 上是 2×）。
+- **未适配**：081 自动更新（只发 Windows 资产，macOS 上 `checks_enabled()`
+  直接 false）、任务的 win_pin（Windows 专属）、提示音改 `afplay` 播合成 WAV。

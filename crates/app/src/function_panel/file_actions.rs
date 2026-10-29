@@ -263,6 +263,8 @@ impl Chat {
         let Some(mut edit) = self.dlg.tree_edit.clone() else {
             return;
         };
+        // Windows 分支（剥尾随点）才需要 mut
+        #[cfg_attr(not(windows), allow(unused_mut))]
         let mut filename = value.to_string();
         // Zed confirm_edit：Windows 下尾随点被文件系统忽略，剥掉防错位
         #[cfg(windows)]

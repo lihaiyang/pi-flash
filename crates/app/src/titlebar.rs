@@ -101,8 +101,17 @@ fn drag_icon(drag: &TabDrag, size: f32, color: u32) -> Option<gpui::AnyElement> 
 /// 2026-10-13 定夺 38→40 与 statusbar 等高）。
 pub(crate) const HEIGHT: f32 = 40.;
 
-/// Caption-button glyph font (Win11; MDL2 covers Win10).
+/// Caption-button glyph font (Win11; MDL2 covers Win10)。macOS 不渲染自绘
+/// 窗口钮（原生交通灯代替），字体常量与按钮一起排除。
+#[cfg(not(target_os = "macos"))]
 pub const CAPTION_FONT: &str = "Segoe Fluent Icons";
+
+/// 左段内容起始 inset：Windows = [`align::TOGGLE_ML`]（与 psp 列表图标对齐）；
+/// macOS 要把红绿灯（close/miniaturize/zoom ≈ 68px 宽）整块让过去。
+#[cfg(any(windows, not(target_os = "macos")))]
+const TITLEBAR_LEAD: f32 = align::TOGGLE_ML;
+#[cfg(target_os = "macos")]
+const TITLEBAR_LEAD: f32 = 78.;
 
 /// 左段（015 功能面板侧）：收放钮贴左 = `tokens::align::TOGGLE_ML`（图标
 /// 视觉线 ICON_LINE 与 psp 列表图标对齐，2026-10-13 定稿）+ 拖拽填充。
@@ -117,7 +126,9 @@ pub(crate) fn topbar_l(_chat: &mut Chat, cx: &mut gpui::Context<Chat>) -> impl g
         .flex()
         .items_center()
         .bg(rgb(t.chrome))
-        .child(div().ml(px(align::TOGGLE_ML)).child(icon_btn(
+        // macOS：窗口左上角是 AppKit 画的三个交通灯（红黄绿），要让出它们
+        // 的横向位置，否则收放钮被压在红绿灯底下点不到。
+        .child(div().ml(px(TITLEBAR_LEAD)).child(icon_btn(
             "panes-toggle",
             "panel-left",
             tr("titlebar.toggle_sidebar"),
@@ -153,12 +164,14 @@ pub(crate) fn topbar_l(_chat: &mut Chat, cx: &mut gpui::Context<Chat>) -> impl g
 }
 
 /// 右段：中段标签栏 + 窗口控制。
+#[cfg_attr(target_os = "macos", allow(unused_variables))]
 pub(crate) fn topbar_r(
     chat: &mut Chat,
     window: &mut Window,
     cx: &mut gpui::Context<Chat>,
 ) -> impl gpui::IntoElement {
     let t = T();
+    #[cfg(not(target_os = "macos"))]
     let maximized = window.is_maximized();
 
     let mut bar = div()
@@ -206,16 +219,24 @@ pub(crate) fn topbar_r(
 
     // 016 右段：仅窗口控制钮（设置下放 018 状态栏、+ 删除）
     // v55: min/max switch to SVG icons via HoverIcon; close keeps red-bg exemption
-    for (area, icon_name) in [
-        (WindowControlArea::Min, "minus"),
-        (
-            WindowControlArea::Max,
-            if maximized { "restore" } else { "square" },
-        ),
-    ] {
-        bar = bar.child(caption_button(area, icon_name, t));
+    //
+    // macOS：这三个钮是 Windows 口径（右上角 + Segoe Fluent Icons 的关闭
+    // 字形），Mac 上原生交通灯已经在左上角，自绘一套既重复、关闭字形还是
+    // 豆腐块。整段在 macOS 不渲染。
+    #[cfg(not(target_os = "macos"))]
+    {
+        for (area, icon_name) in [
+            (WindowControlArea::Min, "minus"),
+            (
+                WindowControlArea::Max,
+                if maximized { "restore" } else { "square" },
+            ),
+        ] {
+            bar = bar.child(caption_button(area, icon_name, t));
+        }
+        bar = bar.child(caption_button(WindowControlArea::Close, "\u{E8BB}", t));
     }
-    bar.child(caption_button(WindowControlArea::Close, "\u{E8BB}", t))
+    bar
 }
 
 /// 30×30 图标钮（topbar 通用；hover chrome-hover）。钮盒/图标走 align 令牌。
@@ -405,7 +426,13 @@ fn tab_strip(chat: &mut Chat, cx: &mut gpui::Context<Chat>) -> gpui::AnyElement 
                     .find(|e| e.manifest.pkg == *pkg)
                     .map(|e| e.manifest.title_zh.clone())
                     .unwrap_or_else(|| pkg.clone());
-                (label.into(), None, false, Some("puzzle"), ContentView::Plugin)
+                (
+                    label.into(),
+                    None,
+                    false,
+                    Some("puzzle"),
+                    ContentView::Plugin,
+                )
             }
         };
         // 文件 tab 行尾标记（023）：冲突 ! > 脏点。zed parity（DiskState::
@@ -760,6 +787,9 @@ fn tab_shell(
         .on_click(switch)
 }
 
+/// Windows 口径的右上角窗口控制钮（最小化/还原/关闭）。macOS 用原生
+/// 交通灯，整个函数排除编译（否则 dead_code + Segoe 字形在 Mac 上是豆腐块）。
+#[cfg(not(target_os = "macos"))]
 fn caption_button(
     area: WindowControlArea,
     icon_name: &'static str,

@@ -15,29 +15,148 @@ pub trait SecretVault {
 /// keyring service 名（凭据管理器里显示的应用名）。
 pub const SERVICE: &str = "PiFlash";
 
-/// 真实凭据库（随平台：windows-native / apple-native）。
+/// 真实凭据库。
+///
+/// - Windows：Credential Manager（`keyring` crate 的 windows-native）。
+/// - macOS：**`/usr/bin/security` CLI，不用 keychain 的 Rust 绑定**。
+///
+/// # 为什么 macOS 绕开 keyring（2026-10-29 实测）
+///
+/// `keyring` 的 apple-native 走 `SecItemAdd`/`SecItemCopyMatching`，落库的条目
+/// 只信任**创建它的那个可执行文件**（adhoc 签名下 designated requirement 就是
+/// 该二进制的 cdhash）。而本项目的凭据是**两个二进制**在用：PF 自己（设置页
+/// 写/读）和 `pif-secret`（pi 执行 `!'…/pif-secret' get <provider>` 取回）。
+/// 实测：PF 写入后 `pif-secret get` 直接 errSecAuthFailed；反过来让
+/// `security` 写、`keyring` 读会**卡在系统授权弹窗**上（无人值守环境下挂死）。
+///
+/// 全链路改走 `/usr/bin/security`（苹果签名、路径稳定）后，条目 ACL 只信任
+/// `security`，而写入/读取/删除**三个动作都由它执行**，于是 PF 与 pif-secret
+/// 都能无弹窗读写，重建二进制（cdhash 变）也不影响。
+///
+/// 明文不进 argv：`-w` 后面不带值，`security` 会从 stdin 要两遍密码（原样
+/// 回显两行即可），`ps` 里看不到 key。
 pub struct KeyringVault;
 
 impl SecretVault for KeyringVault {
     fn set(&self, entry: &str, secret: &str) -> Result<(), String> {
-        keyring::Entry::new(SERVICE, entry)
-            .and_then(|e| e.set_password(secret))
-            .map_err(|e| format!("credential vault: {e}"))
+        #[cfg(target_os = "macos")]
+        {
+            return macos_keychain::set(SERVICE, entry, secret);
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            keyring::Entry::new(SERVICE, entry)
+                .and_then(|e| e.set_password(secret))
+                .map_err(|e| format!("credential vault: {e}"))
+        }
     }
 
     fn get(&self, entry: &str) -> Result<Option<String>, String> {
-        match keyring::Entry::new(SERVICE, entry).and_then(|e| e.get_password()) {
-            Ok(v) => Ok(Some(v)),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(e) => Err(format!("credential vault: {e}")),
+        #[cfg(target_os = "macos")]
+        {
+            return macos_keychain::get(SERVICE, entry);
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            match keyring::Entry::new(SERVICE, entry).and_then(|e| e.get_password()) {
+                Ok(v) => Ok(Some(v)),
+                Err(keyring::Error::NoEntry) => Ok(None),
+                Err(e) => Err(format!("credential vault: {e}")),
+            }
         }
     }
 
     fn delete(&self, entry: &str) -> Result<(), String> {
-        match keyring::Entry::new(SERVICE, entry).and_then(|e| e.delete_credential()) {
-            Ok(()) => Ok(()),
-            Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(format!("credential vault: {e}")),
+        #[cfg(target_os = "macos")]
+        {
+            return macos_keychain::delete(SERVICE, entry);
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            match keyring::Entry::new(SERVICE, entry).and_then(|e| e.delete_credential()) {
+                Ok(()) => Ok(()),
+                Err(keyring::Error::NoEntry) => Ok(()),
+                Err(e) => Err(format!("credential vault: {e}")),
+            }
+        }
+    }
+}
+
+/// macOS：登录钥匙串的通用密码条目，全部经 `/usr/bin/security`（理由见
+/// [`KeyringVault`] 文档）。
+#[cfg(target_os = "macos")]
+mod macos_keychain {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    const SECURITY: &str = "/usr/bin/security";
+
+    pub(super) fn set(service: &str, entry: &str, secret: &str) -> Result<(), String> {
+        let mut child = Command::new(SECURITY)
+            // -U：同 service/account 已存在则更新（幂等，与 keyring set 同义）
+            .args([
+                "add-generic-password",
+                "-U",
+                "-s",
+                service,
+                "-a",
+                entry,
+                "-w",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("credential vault: {e}"))?;
+        if let Some(mut stdin) = child.stdin.take() {
+            // security 会问「password data / retype password」两遍：原样回两次
+            let _ = write!(stdin, "{secret}\n{secret}\n");
+        }
+        let out = child
+            .wait_with_output()
+            .map_err(|e| format!("credential vault: {e}"))?;
+        if out.status.success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "credential vault: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ))
+        }
+    }
+
+    pub(super) fn get(service: &str, entry: &str) -> Result<Option<String>, String> {
+        let out = Command::new(SECURITY)
+            .args(["find-generic-password", "-s", service, "-a", entry, "-w"])
+            .output()
+            .map_err(|e| format!("credential vault: {e}"))?;
+        if out.status.success() {
+            // -w 只输出密码本体（末尾补一个换行）；其它空白原样保留
+            let raw = String::from_utf8_lossy(&out.stdout).into_owned();
+            return Ok(Some(raw.trim_end_matches(['\r', '\n']).to_string()));
+        }
+        // 44 = errSecItemNotFound；老版本只给一行 "could not be found"
+        let err = String::from_utf8_lossy(&out.stderr).into_owned();
+        if out.status.code() == Some(44) || err.contains("could not be found") {
+            Ok(None)
+        } else {
+            Err(format!("credential vault: {}", err.trim()))
+        }
+    }
+
+    pub(super) fn delete(service: &str, entry: &str) -> Result<(), String> {
+        let out = Command::new(SECURITY)
+            .args(["delete-generic-password", "-s", service, "-a", entry])
+            .output()
+            .map_err(|e| format!("credential vault: {e}"))?;
+        if out.status.success() {
+            return Ok(());
+        }
+        let err = String::from_utf8_lossy(&out.stderr).into_owned();
+        if out.status.code() == Some(44) || err.contains("could not be found") {
+            Ok(()) // 幂等：不存在也算成功（与 keyring 分支同语义）
+        } else {
+            Err(format!("credential vault: {}", err.trim()))
         }
     }
 }

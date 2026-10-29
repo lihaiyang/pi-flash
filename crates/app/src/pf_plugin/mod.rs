@@ -2292,10 +2292,13 @@ impl Chat {
         }
         self.plugins.row_cache.clear();
         self.plugins.fn_bar_cache.clear();
-        eprintln!(
-            "[pf-plugin] page_actived 派发 key={} 插件数={} 通知={}",
-            session_key, n, notified
-        );
+        // 无插件不打日志：这条在每帧 notify 上都可能跑，空插件环境会刷屏
+        if n > 0 {
+            eprintln!(
+                "[pf-plugin] page_actived 派发 key={} 插件数={} 通知={}",
+                session_key, n, notified
+            );
+        }
         notified
     }
 

@@ -72,8 +72,10 @@ pub(crate) fn tick_session(chat: &mut Chat, cx: &mut gpui::Context<Chat>) {
     };
     // PF 钩子 page_actived：同一时机把当前页 key 推给插件（PF 独有概念）
     let notified = chat.plugin_page_active(&key, cx);
-    if notified == 0 {
-        // 插件 JS 尚未装载完：不记账，下一拍重试（否则 page_id 永远不落地）
+    if notified == 0 && !chat.plugins.plugins.is_empty() {
+        // 插件 JS 尚未装载完：不记账，下一拍重试（否则 page_id 永远不落地）。
+        // **一个插件都没有**时必须记账收场：否则每帧都重试、每帧一条
+        // eprintln（实测空插件环境刷屏，且把热路径写日志）。
         return;
     }
     let payload = serde_json::json!({ "key": key }).to_string();

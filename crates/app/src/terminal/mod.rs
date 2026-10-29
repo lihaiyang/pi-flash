@@ -4,9 +4,10 @@
 //! pi-web surface: right-panel terminal tabs (TabBar), 38px header with status
 //! dot + cwd + Restart, exit banner, fixed dark xterm surface (#111318) in
 //! every theme, Consolas 13px / lineHeight 1.25, scrollback 8000, cursor #60a5fa.
-//! pi-web spawns node-pty (ComSpec on Windows); here `tty::new` provides
-//! ConPTY directly. Reconnect (SSE resume) has no in-process equivalent and is
-//! intentionally dropped; mouse-reporting apps get wheel-as-arrows only.
+//! pi-web spawns node-pty (ComSpec on Windows); here `tty::new` provides the
+//! PTY directly (Windows ConPTY / macOS 与 Linux 走 forkpty). Reconnect (SSE
+//! resume) has no in-process equivalent and is intentionally dropped;
+//! mouse-reporting apps get wheel-as-arrows only.
 use crate::*;
 
 use std::path::PathBuf;
@@ -186,13 +187,7 @@ pub fn spawn_terminal(
     let term = Arc::new(FairMutex::new(Term::new(config, &dims, proxy.clone())));
 
     let mut options = tty::Options::default();
-    // terminal-manager.ts: win32 -> ComSpec ?? cmd.exe with no args
-    let shell = shell_override.unwrap_or_else(|| {
-        Shell::new(
-            std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".to_string()),
-            Vec::new(),
-        )
-    });
+    let shell = shell_override.unwrap_or_else(default_shell);
     options.shell = Some(shell);
     options.working_directory = Some(cwd.clone());
     options.env = shell_env();
@@ -228,6 +223,68 @@ pub fn spawn_terminal(
     })
 }
 
+/// 默认交互 shell（新终端 tab 用）。
+///
+/// - Windows：`ComSpec` ?? `cmd.exe`，无参数——terminal-manager.ts 同款。
+/// - macOS/POSIX：`$SHELL` ?? `/bin/zsh`，带 `-l` 起**登录 shell**。从 Finder
+///   双击 .app 时进程只有 launchd 的最小 PATH（/usr/bin:/bin:/usr/sbin:/sbin），
+///   用户装的 git / node / brew / cargo 全在 zshrc、zprofile 里；不起登录
+///   shell 的终端 tab 敲什么都 command not found。
+pub(crate) fn default_shell() -> Shell {
+    #[cfg(windows)]
+    {
+        Shell::new(
+            std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".to_string()),
+            Vec::new(),
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        let sh = login_shell();
+        Shell::new(sh, vec!["-l".into()])
+    }
+}
+
+/// 021 右键【执行】用的 shell：跑完 `command` 后仍留下可用提示符（语义等价
+/// Windows 的 `cmd /k`，tab 不随脚本退出而关闭）。
+pub(crate) fn exec_shell(command: String) -> Shell {
+    #[cfg(windows)]
+    {
+        Shell::new(
+            std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".to_string()),
+            vec!["/k".into(), command],
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        // POSIX 没有 /k：`-c` 里先跑命令，再 exec 一个登录 shell 顶替当前
+        // 进程——同一个 PTY 上继续交互，脚本的 stdout/exit 都在屏上可查。
+        let sh = login_shell();
+        let quoted = if sh.contains(' ') {
+            format!("'{sh}'")
+        } else {
+            sh.clone()
+        };
+        Shell::new(
+            sh,
+            vec![
+                "-l".into(),
+                "-c".into(),
+                format!("{command}; exec {quoted} -l"),
+            ],
+        )
+    }
+}
+
+/// 用户登录 shell 绝对路径：`$SHELL` > `/bin/zsh`（macOS 10.15+ 默认）。
+#[cfg(not(windows))]
+fn login_shell() -> String {
+    std::env::var("SHELL")
+        .ok()
+        .filter(|s| !s.trim().is_empty() && std::path::Path::new(s).is_file())
+        .unwrap_or_else(|| "/bin/zsh".to_string())
+}
+
 /// terminal-manager.ts shellEnvironment: inherit everything, then pin TERM /
 /// COLORTERM and a UTF-8 LANG when none is set (Windows codepage fix).
 fn shell_env() -> std::collections::HashMap<String, String> {
@@ -238,6 +295,13 @@ fn shell_env() -> std::collections::HashMap<String, String> {
         .iter()
         .any(|k| env.contains_key(*k));
     if !has_lang {
+        // Windows 的 C.UTF-8 是 MSVC 运行时认的名字；macOS 的 libc 不认
+        // （会打 "setlocale: cannot change locale"），用系统自带 en_US.UTF-8。
+        #[cfg(windows)]
+        env.insert("LANG".into(), "C.UTF-8".into());
+        #[cfg(target_os = "macos")]
+        env.insert("LANG".into(), "en_US.UTF-8".into());
+        #[cfg(all(not(windows), not(target_os = "macos")))]
         env.insert("LANG".into(), "C.UTF-8".into());
     }
     env
@@ -1407,10 +1471,7 @@ impl Chat {
         let id = self.ws.term_seq;
         let focus = cx.focus_handle();
         let proxy = terminal::Proxy { tab: id, tx };
-        let shell = Shell::new(
-            std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".to_string()),
-            vec!["/k".into(), plan.command],
-        );
+        let shell = terminal::exec_shell(plan.command);
         match terminal::spawn_terminal(
             id,
             dir,

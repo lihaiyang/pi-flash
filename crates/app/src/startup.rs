@@ -562,7 +562,14 @@ fn spawn_splash_gate(cx: &mut gpui::Context<Chat>) {
         }
         let _ = this.update(cx, |c, cx| {
             c.pool.booted = true;
-            c.pool.pending_zoom = true;
+            // §4「启动默认最大化」是 Windows 口径（那边窗口外框/客户区不对称、
+            // 最大化才不浪费屏幕）。macOS 的 zoom 会顶到菜单栏下方、且与
+            // 「绿点 = 全屏」的 AppKit 惯例打架——保持建窗尺寸（1180×760），
+            // 用户想要大窗自己点绿点。
+            #[cfg(not(target_os = "macos"))]
+            {
+                c.pool.pending_zoom = true;
+            }
             // 040 延迟加载：揭幕（切换启动页）后才开始测扩展/skill 说明
             // token——非关键数据，不对启动造成任何负担
             c.spawn_token_probe(cx);

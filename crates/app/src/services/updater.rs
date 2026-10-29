@@ -212,6 +212,8 @@ pub(crate) fn next_payload() -> Option<(String, PathBuf)> {
 /// 只认安装布局：目录名既不是 `payload`、也不是带完整版本戳的
 /// `payload-<版本>`（开发构建 / 绿色解压包）一律 None；debug 构建恒 None
 /// ——开发跑多少遍都不许碰用户的开始菜单与任务栏。
+/// 任务栏/开始菜单稳定入口（win_pin 专用，Windows 才有）。
+#[cfg(windows)]
 pub(crate) fn stable_entry_exe() -> Option<PathBuf> {
     if cfg!(debug_assertions) {
         return None;
@@ -244,6 +246,12 @@ fn self_version_matches(me: &Path) -> bool {
 /// exe 并返回 true（调用方随即退出，用户只感觉这次启动慢半拍）。顺序：
 /// 先起后台清理线程（删旧版本目录，不阻塞开窗），再判断交接。
 pub(crate) fn handoff_if_newer() -> bool {
+    // macOS：.app 是单目录 bundle，没有「版本化载荷目录 + 交接 exe」这条
+    // 路（也从不发布 darwin 资产，见 docs/RELEASE.md §1）。启动时不起清理
+    // 线程、不做交接，省掉一次扫描。
+    if cfg!(target_os = "macos") {
+        return false;
+    }
     let Some(me) = my_exe_dir() else {
         return false;
     };
@@ -986,6 +994,13 @@ fn read_changelog_cache(version: &str) -> Option<String> {
 impl crate::Chat {
     /// 调试/开发不跑更新（PI_FLASH_UPDATE_CHECK=1 可强制，0 可关）。
     fn checks_enabled() -> bool {
+        // macOS 不发版：release 里没有 darwin 资产，检查到的「新版本」是
+        // Windows zip，点下载必 404；.app 也没有可交接的载荷目录。关死更新
+        // 检查（`PI_FLASH_UPDATE_CHECK=1` 仍可强制打开做手工验证）。
+        if cfg!(target_os = "macos") && std::env::var("PI_FLASH_UPDATE_CHECK").as_deref() != Ok("1")
+        {
+            return false;
+        }
         match std::env::var("PI_FLASH_UPDATE_CHECK").as_deref() {
             Ok("1") => true,
             Ok("0") => false,

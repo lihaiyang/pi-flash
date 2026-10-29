@@ -329,6 +329,23 @@ fn main() {
                 KeyBinding::new("alt-1", MaximizeSessionList, None),
                 KeyBinding::new("alt-2", MaximizeFileTree, None),
             ]);
+            // macOS 主修饰键是 ⌘：上面那批 ctrl-* 绑定原样保留（习惯/远程
+            // 桌面通用），再镜像一份 cmd-* 到同一批动作。同深度后注册者
+            // 优先，且 tooltip 的键位 chip 反查取的就是最新注册那条 → Mac
+            // 上自然显示 ⌘P/⌘N/⌘K/⌘L/⌘⇧F。cmd-c/cmd-v 与此同理抢的是组件
+            // 的同名绑定（组件绑定本来就是 ⌘，分流逻辑见渲染根 on_action，
+            // ctrl-* 与 cmd-* 走同一条路）。
+            #[cfg(target_os = "macos")]
+            cx.bind_keys([
+                KeyBinding::new("cmd-v", ComposerPaste, Some("Input")),
+                KeyBinding::new("cmd-c", CopyMessageSelection, Some("Input")),
+                KeyBinding::new("cmd-s", FileSave, Some("Input")),
+                KeyBinding::new("cmd-p", OpenProjectPicker, None),
+                KeyBinding::new("cmd-n", NewSession, None),
+                KeyBinding::new("cmd-k", OpenSessionSearch, None),
+                KeyBinding::new("cmd-l", OpenFileSearch, None),
+                KeyBinding::new("cmd-shift-f", OpenProjectSearch, None),
+            ]);
             perf_mark("font catalog + component init + keymap");
             appearance::sync_gpui_tokens(cx);
             // startup restore (§4)：每次启动默认最大化（位置不持久化——

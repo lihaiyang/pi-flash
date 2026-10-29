@@ -118,7 +118,33 @@ pub fn play_notify_sound() {
             );
         }
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        // macOS 无 PlaySoundW 的等价内存播放：把同一份合成 WAV 落盘一次
+        // （<PF 目录>/sound/done.wav，约 56KB），后台 `afplay` 播。afplay 是
+        // 系统自带（/usr/bin/afplay），不引入任何音频依赖。
+        use std::sync::OnceLock;
+        static WAV_PATH: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
+        let path = WAV_PATH.get_or_init(|| {
+            let dir = pi_link::paths::dir()?.join("sound");
+            std::fs::create_dir_all(&dir).ok()?;
+            let p = dir.join("done.wav");
+            if !p.is_file() {
+                std::fs::write(&p, done_chime_wav()).ok()?;
+            }
+            Some(p)
+        });
+        if let Some(p) = path.as_ref() {
+            // 非阻塞：afplay 自己播完退出，PF 启动路径一秒都不等它
+            let _ = std::process::Command::new("/usr/bin/afplay")
+                .arg(p)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+        }
+    }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
     {
         // 其他平台暂无内置播放器，保持 no-op（与旧 MessageBeep 实现一致）。
     }

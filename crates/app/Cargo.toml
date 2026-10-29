@@ -11,8 +11,13 @@ default-run = "pi-flash"
 name = "pi-flash"
 path = "src/main.rs"
 
-[target.'cfg(windows)'.build-dependencies]
+# serde_json 必须在**全平台** build-dependencies 里：build.rs 的 dev_sign_proof
+# （090-5 L3 开发期自签宿主证明）解析 proof.mjs 的 JSON 输出，这项与平台无关。
+# 曾只在 cfg(windows) 组里 → macOS 上 build script 直接 E0433 编不过。
+[build-dependencies]
 serde_json = "1"
+
+[target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"
 
 [dependencies]
@@ -96,6 +101,14 @@ windows = { version = "0.61", features = [
     "Win32_UI_Shell",
     "Win32_UI_Shell_PropertiesSystem",
 ] }
+
+# macOS 构建机若只装了 Command Line Tools（无 Xcode → 无 `xcrun metal`），
+# gpui 默认在 build.rs 里调 metal 编译 shaders.metal 会直接失败。runtime_shaders
+# 改成把（已拼接 header 的）Metal 源码编进二进制、首次建 renderer 时用
+# MTLDevice::newLibraryWithSource 现场编译——CLT 也能构建出可运行的 .app。
+# 只对 darwin 生效：Windows 侧 fxc 路径完全不受影响。
+[target.'cfg(target_os = "macos")'.dependencies]
+gpui = { version = "0.2.2", features = ["runtime_shaders"] }
 
 [dev-dependencies]
 # gpui 测试夹具（TestAppContext + 真布局）——只有 app 的 test target 会带上

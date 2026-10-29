@@ -22,8 +22,10 @@ use crate::fs_lock;
 /// 标记条目里的命令前缀成员：判据靠它区分「PF 写的」与「用户写的」。
 const MARKER_TAG: &str = "pif-secret";
 
-/// helper 路径：与当前可执行文件同目录（开发期 = target/debug，安装后 =
-/// 安装目录；两处都随构建产出 pif-secret）。
+/// helper 路径：与当前可执行文件同目录（开发期 = target/release，Windows
+/// 安装目录 = payload/）；macOS .app 里主可执行在 `Contents/MacOS`，而
+/// 附属二进制放 `Contents/Resources`（Apple 的 bundle 布局只允许 MacOS 里
+/// 有主可执行），所以额外探一层 `../Resources/`。
 pub fn helper_exe() -> PathBuf {
     let name = if cfg!(windows) {
         "pif-secret.exe"
@@ -32,7 +34,18 @@ pub fn helper_exe() -> PathBuf {
     };
     std::env::current_exe()
         .ok()
-        .and_then(|p| p.parent().map(|d| d.join(name)))
+        .and_then(|p| {
+            let dir = p.parent()?;
+            let near = dir.join(name);
+            if near.is_file() {
+                return Some(near);
+            }
+            let res = dir.join("../Resources").join(name);
+            if res.is_file() {
+                return Some(res);
+            }
+            Some(near)
+        })
         .unwrap_or_else(|| PathBuf::from(name))
 }
 
