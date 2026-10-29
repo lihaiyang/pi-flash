@@ -266,5 +266,15 @@ vendored pi，ad-hoc 签名；**不出 dmg/img**）。以下是踩过的坑，�
 - **提示音**：`<PF>/sound/done.wav` 落盘一次，`/usr/bin/afplay` 后台播
   （已实测：轮末生成 49KB WAV 且 afplay 进程在跑）。声音开关默认关
   （`app-settings.json` 的 `sound`），自动化里想验就先写 `{"sound": true}`。
+- **Windows 分支可以在 Mac 上真编一遍**（比逐处 cfg 审计可靠）：`brew install
+  mingw-w64`（1.5G）+ `rustup target add x86_64-pc-windows-gnu`，然后
+  `CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc cargo check -p app
+  --target x86_64-pc-windows-gnu`。2026-10-29 实测整仓（app + pi-link）在
+  windows-gnu 目标下 `Finished`，即所有 `cfg(windows)` 分支（cmd /k 配方、
+  keyring、win_pin、自绘窗口钮、`PLAYSOUNDW`）都能编译。**msvc 目标做不到**
+  （`ring` 的 C 依赖要 MSVC 头文件），发版目标仍是 msvc，但两端 cfg 完全一致。
+  网络不稳时加 `CARGO_HTTP_MULTIPLEXING=false`（crates.io 常见
+  `HTTP2 framing layer` / `Transferred a partial file`），brew 也一样会
+  `curl: (18)` 断在瓶子上，重跑即可。
 - **未适配**：081 自动更新（只发 Windows 资产，macOS 上 `checks_enabled()`
   直接 false）、任务的 win_pin（Windows 专属）、提示音改 `afplay` 播合成 WAV。
