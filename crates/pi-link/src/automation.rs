@@ -136,9 +136,12 @@ pub mod method {
     pub const INPUT_KEYS: &str = "input.keys";
     pub const INPUT_FOCUS: &str = "input.focus";
     /// 注入鼠标事件（走真实 gpui hit_test 事件链，穿透/命中类 bug 的自动化
-    /// 入口）：action = click|down|up|move|rclick；坐标 x/y 给窗口内绝对
-    /// 物理像素，或 rx/ry 给 0..1 相对视口（缺省 0.5/0.5）；count = 连击数
-    /// （缺省 1）。回 {deferred: true}，效果断言照事务范式 wait/snapshot/shot
+    /// 入口）：action = click|down|up|move|rclick；坐标 x/y 给窗口内**逻辑
+    /// 像素**（handler 里直接进 `gpui::px(...)`），或 rx/ry 给 0..1 相对**视口
+    /// 物理尺寸**（缺省 0.5/0.5）——两者单位不同，Retina 上按 rx 算要除以
+    /// scale_factor 才是逻辑坐标（实测踩过：文档曾写"物理像素"，2× 屏上
+    /// 落点偏一倍）。count = 连击数（缺省 1）。回 {deferred: true}，效果断言
+    /// 照事务范式 wait/snapshot/shot
     pub const INPUT_MOUSE: &str = "input.mouse";
     /// 打开（或聚焦）工作区终端（UI 测试用；状态读 app 面的
     /// focused/terminals/active_terminal，网格读 term 面）

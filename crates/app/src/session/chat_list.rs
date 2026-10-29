@@ -236,6 +236,18 @@ impl ChatList {
     ///
     /// 同时置 free_scroll：导航定位是程序化跳转，若不清，流式期间 sync 第
     /// 6 步会把视口硬拽回钉顶锚点，定位立刻被覆盖。
+    /// 拖动导航刻度条：按**屏幕像素**滚（+dy = 指针下移 = 内容向上滚 = 往下
+    /// 翻）。几何无关，不依赖刻度条在屏上的坐标——14px 窄条拖出带外也跟手。
+    pub(crate) fn scroll_by(&self, dy: f32) {
+        use gpui_component::scroll::ScrollHandleOffsetable as _;
+        let handle = crate::ui::list_handle::ListStateHandle(self.state.clone());
+        let cur = handle.offset();
+        handle.set_offset(gpui::point(cur.x, cur.y - gpui::px(dy)));
+        self.core.at_bottom.set(false);
+        self.core.free_scroll.set(true);
+        self.core.nav_pinned.set(None);
+    }
+
     pub(crate) fn nav_goto(&self, turn: usize, ix: usize) {
         self.state.scroll_to(ListOffset {
             item_ix: ix,

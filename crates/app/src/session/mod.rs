@@ -831,6 +831,7 @@ fn nav_gutter(
             let on = active_tick == Some(i);
             let target_ix = summary.turns[turn_of_tick(i)].user_ix;
             let rt_scroll = rt_entity.clone();
+            let rt_scroll_drag = rt_entity.clone();
             rail = rail.child(
                 div()
                     .id(SharedString::from(format!("nav-node-{i}")))
@@ -842,7 +843,15 @@ fn nav_gutter(
                     .cursor_pointer()
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |this, _, window, cx| {
+                        cx.listener(move |this, ev: &gpui::MouseDownEvent, window, cx| {
+                            // 拖拽起点：后续 move 按帧间 dy 滚屏（见下方 on_mouse_move）
+                            this.layout.nav_drag_y = Some(f32::from(ev.position.y));
+                            // 先收摘要面板：400px 卡片浮层会盖住内容区，不收的
+                            // 话用户点完刻度条只看到浮层、以为「点了没反应」
+                            //（2026-10-29 用户报障）。
+                            this.layout.nav_open = false;
+                            this.layout.nav_hide_at = None;
+                            this.layout.nav_flyout_hovered = false;
                             // 面板联动（v63-6）：面板滚到该段的区域起始卡
                             //（卡序号 = 轮序号）
                             this.layout
@@ -852,6 +861,37 @@ fn nav_gutter(
                                 .read(cx)
                                 .pager
                                 .nav_goto(turn_of_tick(i), target_ix);
+                            window.refresh();
+                        }),
+                    )
+                    // 按住拖过刻度条 = 连续跳到经过的轮次（用户 2026-10-29 报障：
+                    // 「像滚动条一样拖」不生效）。`event.dragging()` 在 macOS 上
+                    // 由 NSLeftMouseDragged → pressed_button=Left 置位，真拖也
+                    // 收得到事件；指针沿刻度条走即逐个 segment 触发。
+                    .on_mouse_move(cx.listener(
+                        move |this, ev: &gpui::MouseMoveEvent, window, cx| {
+                            // 未按住 = 普通悬停：清掉拖拽基准（mouse_up 可能落在刻度条
+                            // 之外收不到，靠这条兜底，免得之后一悬停就跟着滚）
+                            let y = f32::from(ev.position.y);
+                            if !ev.dragging() {
+                                this.layout.nav_drag_y = None;
+                                return;
+                            }
+                            let Some(last) = this.layout.nav_drag_y else {
+                                return;
+                            };
+                            let dy = y - last;
+                            if dy.abs() >= 0.5 {
+                                rt_scroll_drag.read(cx).pager.scroll_by(dy);
+                            }
+                            this.layout.nav_drag_y = Some(y);
+                            window.refresh();
+                        },
+                    ))
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(|this, _, window, _cx| {
+                            this.layout.nav_drag_y = None;
                             window.refresh();
                         }),
                     )

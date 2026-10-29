@@ -154,13 +154,8 @@ pub(crate) fn topbar_l(_chat: &mut Chat, cx: &mut gpui::Context<Chat>) -> impl g
     }
     bar
         // drag filler: the empty middle is the drag region (HTCAPTION —
-        // platform handles move + double-click-zoom)
-        .child(
-            div()
-                .flex_1()
-                .h_full()
-                .window_control_area(WindowControlArea::Drag),
-        )
+        // platform handles move + double-click-zoom；macOS 见 drag_filler)
+        .child(drag_filler(div().flex_1()))
 }
 
 /// 右段：中段标签栏 + 窗口控制。
@@ -209,13 +204,7 @@ pub(crate) fn topbar_r(
 
     // 标签区右缘到最小化钮左缘固定 20px（016 2026-10-14 定案），仍是
     // 窗口拖拽命中区
-    bar = bar.child(
-        div()
-            .w(px(20.))
-            .flex_shrink_0()
-            .h_full()
-            .window_control_area(WindowControlArea::Drag),
-    );
+    bar = bar.child(drag_filler(div().w(px(20.)).flex_shrink_0()));
 
     // 016 右段：仅窗口控制钮（设置下放 018 状态栏、+ 删除）
     // v55: min/max switch to SVG icons via HoverIcon; close keeps red-bg exemption
@@ -237,6 +226,28 @@ pub(crate) fn topbar_r(
         bar = bar.child(caption_button(WindowControlArea::Close, "\u{E8BB}", t));
     }
     bar
+}
+
+/// 客户区自绘标题栏的「空白拖拽段」。
+///
+/// Windows：`WindowControlArea::Drag` → 平台按 HTCAPTION 处理拖动 + 双击最大化。
+/// **macOS：`on_hit_test_window_control` 是空实现**（gpui 没接 mac 的
+/// `-[NSWindow zoom:]` 通道），拖窗口靠 AppKit 标题栏条带，双击最大化则
+/// 完全没人接——所以这里在 mac 上自己挂一个双击 → `zoom_window()`（AppKit
+/// `zoom:`，与系统「双击标题栏缩放」同义，是 toggle）。Windows 分支保持
+/// 原样，避免和平台自己的双击重复触发。
+fn drag_filler(el: gpui::Div) -> gpui::Div {
+    let el = el.h_full().window_control_area(WindowControlArea::Drag);
+    #[cfg(target_os = "macos")]
+    let el = el.on_mouse_down(
+        MouseButton::Left,
+        |ev: &gpui::MouseDownEvent, window: &mut Window, _cx: &mut gpui::App| {
+            if ev.click_count == 2 {
+                window.zoom_window();
+            }
+        },
+    );
+    el
 }
 
 /// 30×30 图标钮（topbar 通用；hover chrome-hover）。钮盒/图标走 align 令牌。

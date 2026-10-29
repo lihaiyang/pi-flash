@@ -375,6 +375,10 @@ pub(crate) struct LayoutUi {
     /// 浏览操作区的最后视图（Term/File）：文件树标签点击时恢复
     pub(crate) browse_last: ContentView,
     pub(crate) nav_open: bool,
+    /// 拖动导航刻度条时的上一帧指针 y（logical）；None = 不在拖。
+    /// 刻度条只有 14px 宽、拖出带外仍要跟手（gpui 按按下元素派发 move），
+    /// 所以拖拽走「帧间 dy → 滚屏像素」而不是「指针 → 段号」的几何映射。
+    pub(crate) nav_drag_y: Option<f32>,
     pub(crate) nav_hide_at: Option<std::time::Instant>,
     pub(crate) nav_flyout_hovered: bool,
     /// flyout 内鼠标所在轮（选择框/比例尺亮点跟随鼠标）
@@ -585,6 +589,7 @@ impl Chat {
                 content_view: ContentView::Chat,
                 browse_last: ContentView::Term,
                 nav_open: false,
+                nav_drag_y: None,
                 nav_hide_at: None,
                 nav_flyout_hovered: false,
                 nav_hover_turn: None,
